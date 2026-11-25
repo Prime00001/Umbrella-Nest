@@ -222,6 +222,29 @@
     .notice.ok { display: block; background: rgba(16, 185, 129, 0.16); border: 1px solid rgba(16, 185, 129, 0.45); color: #6ee7b7; }
     .notice.err { display: block; background: rgba(239, 68, 68, 0.16); border: 1px solid rgba(239, 68, 68, 0.45); color: #fca5a5; }
 
+    .lock-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+      background: radial-gradient(circle at top right, #102a43 0%, #050f18 70%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .lock-card {
+      width: min(440px, 100%);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 26px;
+      box-shadow: var(--shadow-3d);
+    }
+
+    .lock-card h2 { font-size: 1.35rem; font-weight: 800; color: #38bdf8; margin-bottom: 8px; }
+    .lock-card p { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 16px; }
+
     .hidden { display: none !important; }
 
     @media (max-width: 900px) {
@@ -234,6 +257,23 @@
   </style>
 </head>
 <body>
+  <div id="adminLockScreen" class="lock-screen">
+    <form class="lock-card" id="adminUnlockForm">
+      <h2>🔒 অ্যাডমিন সিকিউরিটি লক</h2>
+      <p>Umbrella Nest অ্যাডমিন প্যানেলে প্রবেশ করতে শক্তিশালী অ্যাডমিন পাসওয়ার্ড দিন।</p>
+      <div class="form-group">
+        <label for="adminPassInput">অ্যাডমিন পাসওয়ার্ড *</label>
+        <input type="password" id="adminPassInput" required autocomplete="current-password" placeholder="শক্তিশালী পাসওয়ার্ড লিখুন" />
+      </div>
+      <div id="adminLockNotice" class="notice"></div>
+      <div style="display:flex; gap:10px; margin-top:16px; flex-wrap:wrap;">
+        <button type="submit" class="btn btn-primary" style="flex:1; justify-content:center;">আনলক করুন</button>
+        <a href="index.html" class="btn">স্টোরফ্রন্ট</a>
+      </div>
+    </form>
+  </div>
+
+  <div id="adminAppShell" class="hidden">
   <header>
     <div class="container header-inner">
       <div class="title-wrap">
@@ -241,6 +281,7 @@
         <p>হিরো ব্যানার (সর্বোচ্চ ১০০টি), পণ্য এবং অর্ডার ম্যানেজ করুন • লোকাল ডিভাইস থেকে ছবি আপলোড সমর্থিত</p>
       </div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-danger" id="lockAdminBtn">🔒 লক করুন</button>
         <a href="index.html" class="btn btn-sky">← স্টোরফ্রন্ট দেখুন</a>
       </div>
     </div>
@@ -358,6 +399,27 @@
       <div id="ordersListContainer"></div>
     </section>
   </main>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, set, remove, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAwHzUiB4hqX9Vgt_eyBbT79CtB5PHa86s",
+      authDomain: "umbrella-nest.firebaseapp.com",
+      databaseURL: "https://umbrella-nest-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "umbrella-nest",
+      storageBucket: "umbrella-nest.firebasestorage.app",
+      messagingSenderId: "64335500660",
+      appId: "1:64335500660:web:174a2420a26f373cd38821",
+      measurementId: "G-C1S6XJ7LL6"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    window.UN_ADMIN_RTDB = { db, ref, set, remove, onValue };
+  </script>
 
   <script>
     const STORAGE_KEYS = {
@@ -367,6 +429,55 @@
     };
 
     const MAX_BANNERS = 100;
+
+    // SHA-256 hash of passcode: un,Un,uN,umbrellanest@1907
+    const ADMIN_PASSCODE_HASH = "3e80a9026626e9c00c2bed9ee565ed4379374c621b0be22598e65c6bdb2a5f4d";
+    let adminUnlocked = false;
+    let failedAttempts = 0;
+
+    async function sha256Hex(plainText) {
+      const encoded = new TextEncoder().encode(String(plainText));
+      const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+      return Array.from(new Uint8Array(hashBuffer))
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("");
+    }
+
+    function setAdminLockedUI(unlocked) {
+      adminUnlocked = Boolean(unlocked);
+      document.getElementById("adminLockScreen").classList.toggle("hidden", adminUnlocked);
+      document.getElementById("adminAppShell").classList.toggle("hidden", !adminUnlocked);
+    }
+
+    document.getElementById("adminUnlockForm").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const inputEl = document.getElementById("adminPassInput");
+      const noticeEl = document.getElementById("adminLockNotice");
+      noticeEl.className = "notice";
+
+      const candidate = inputEl.value || "";
+      const digest = await sha256Hex(candidate);
+
+      if (digest === ADMIN_PASSCODE_HASH) {
+        failedAttempts = 0;
+        inputEl.value = "";
+        setAdminLockedUI(true);
+        startAdminRealtimeListeners();
+        renderBanners();
+        renderProductsAdmin();
+        renderOrders();
+      } else {
+        failedAttempts += 1;
+        inputEl.value = "";
+        noticeEl.className = "notice err";
+        noticeEl.textContent = `ভুল পাসওয়ার্ড! (${failedAttempts} বার ভুল চেষ্টা করা হয়েছে)`;
+      }
+    });
+
+    document.getElementById("lockAdminBtn").addEventListener("click", function () {
+      setAdminLockedUI(false);
+      document.getElementById("adminPassInput").value = "";
+    });
 
     let uploadedBannerDataUrl = "";
     let uploadedProductDataUrl = "";
@@ -390,7 +501,11 @@
     }
 
     function saveBanners(list) {
-      localStorage.setItem(STORAGE_KEYS.BANNERS, JSON.stringify(list.slice(0, MAX_BANNERS)));
+      const capped = list.slice(0, MAX_BANNERS);
+      localStorage.setItem(STORAGE_KEYS.BANNERS, JSON.stringify(capped));
+      if (window.UN_ADMIN_RTDB) {
+        window.UN_ADMIN_RTDB.set(window.UN_ADMIN_RTDB.ref(window.UN_ADMIN_RTDB.db, "banners"), capped).catch(() => {});
+      }
     }
 
     function getProducts() {
@@ -404,6 +519,9 @@
 
     function saveProducts(list) {
       localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(list));
+      if (window.UN_ADMIN_RTDB) {
+        window.UN_ADMIN_RTDB.set(window.UN_ADMIN_RTDB.ref(window.UN_ADMIN_RTDB.db, "products"), list).catch(() => {});
+      }
     }
 
     function getOrders() {
@@ -417,10 +535,23 @@
 
     function saveOrders(list) {
       localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(list));
+      if (window.UN_ADMIN_RTDB) {
+        const { db, ref, set } = window.UN_ADMIN_RTDB;
+        if (!list.length) {
+          set(ref(db, "orders"), null).catch(() => {});
+        } else {
+          const mapObj = {};
+          list.forEach(o => {
+            if (o && o.orderId) mapObj[o.orderId] = o;
+          });
+          set(ref(db, "orders"), mapObj).catch(() => {});
+        }
+      }
     }
 
     document.querySelectorAll(".tab-btn").forEach(btn => {
       btn.addEventListener("click", () => {
+        if (!adminUnlocked) return;
         document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         const target = btn.getAttribute("data-tab");
@@ -470,6 +601,7 @@
     }
 
     function deleteBanner(id) {
+      if (!adminUnlocked) return;
       const next = getBanners().filter(b => b.id !== id);
       saveBanners(next);
       renderBanners();
@@ -477,6 +609,7 @@
 
     document.getElementById("bannerForm").addEventListener("submit", function (e) {
       e.preventDefault();
+      if (!adminUnlocked) return;
       const notice = document.getElementById("bannerNotice");
       notice.className = "notice";
 
@@ -563,6 +696,7 @@
     }
 
     function deleteProductAdmin(id) {
+      if (!adminUnlocked) return;
       const next = getProducts().filter(p => p.id !== id);
       saveProducts(next);
       renderProductsAdmin();
@@ -570,6 +704,7 @@
 
     document.getElementById("productForm").addEventListener("submit", function (e) {
       e.preventDefault();
+      if (!adminUnlocked) return;
       const notice = document.getElementById("prodNotice");
       notice.className = "notice";
 
@@ -621,6 +756,7 @@
     });
 
     function updateOrderStatus(orderId, newStatus) {
+      if (!adminUnlocked) return;
       const orders = getOrders().map(o => {
         if (String(o.orderId) === String(orderId)) {
           return { ...o, status: newStatus };
@@ -632,12 +768,17 @@
     }
 
     function deleteOrder(orderId) {
+      if (!adminUnlocked) return;
       const orders = getOrders().filter(o => String(o.orderId) !== String(orderId));
       saveOrders(orders);
+      if (window.UN_ADMIN_RTDB) {
+        window.UN_ADMIN_RTDB.remove(window.UN_ADMIN_RTDB.ref(window.UN_ADMIN_RTDB.db, "orders/" + orderId)).catch(() => {});
+      }
       renderOrders();
     }
 
     function deleteAllOrders() {
+      if (!adminUnlocked) return;
       saveOrders([]);
       renderOrders();
     }
@@ -691,9 +832,53 @@
     document.getElementById("adminOrderSearchInput")?.addEventListener("input", renderOrders);
     document.getElementById("adminProductSearchInput")?.addEventListener("input", renderProductsAdmin);
 
-    renderBanners();
-    renderProductsAdmin();
-    renderOrders();
+    let adminListenersStarted = false;
+    function startAdminRealtimeListeners() {
+      if (adminListenersStarted) return;
+      const waitTimer = setInterval(() => {
+        if (!window.UN_ADMIN_RTDB || !adminUnlocked) return;
+        clearInterval(waitTimer);
+        adminListenersStarted = true;
+        const { db, ref, onValue } = window.UN_ADMIN_RTDB;
+
+        onValue(ref(db, "banners"), (snap) => {
+          const val = snap.val();
+          if (Array.isArray(val)) {
+            localStorage.setItem(STORAGE_KEYS.BANNERS, JSON.stringify(val.slice(0, MAX_BANNERS)));
+            renderBanners();
+          } else if (val && typeof val === "object") {
+            localStorage.setItem(STORAGE_KEYS.BANNERS, JSON.stringify(Object.values(val).slice(0, MAX_BANNERS)));
+            renderBanners();
+          }
+        });
+
+        onValue(ref(db, "products"), (snap) => {
+          const val = snap.val();
+          if (Array.isArray(val)) {
+            localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(val));
+            renderProductsAdmin();
+          } else if (val && typeof val === "object") {
+            localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(Object.values(val)));
+            renderProductsAdmin();
+          }
+        });
+
+        onValue(ref(db, "orders"), (snap) => {
+          const val = snap.val();
+          if (!val) {
+            localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify([]));
+            renderOrders();
+            return;
+          }
+          const arr = Array.isArray(val) ? val.filter(Boolean) : Object.values(val);
+          arr.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+          localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(arr));
+          renderOrders();
+        });
+      }, 150);
+    }
+
+    setAdminLockedUI(false);
   </script>
 </body>
 </html>

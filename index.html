@@ -11,7 +11,7 @@
     :root {
       --bg-deep: #07131e;
       --bg-surface: #0d2133;
-      --bg-card: rgba(14, 34, 52, 0.84);
+      --bg-card: rgba(14, 34, 52, 0.85);
       --bg-elevated: rgba(20, 48, 72, 0.92);
       --text-main: #f1f7fc;
       --text-muted: #9eb7cc;
@@ -22,7 +22,7 @@
       --success: #10b981;
       --danger: #ef4444;
       --border: rgba(148, 197, 233, 0.18);
-      --shadow-3d: 0 18px 38px rgba(2, 10, 18, 0.55), 0 2px 0 rgba(255, 255, 255, 0.06) inset;
+      --shadow-3d: 0 20px 40px rgba(2, 10, 18, 0.55), 0 2px 0 rgba(255, 255, 255, 0.06) inset;
       --radius: 18px;
       --body-bg: radial-gradient(circle at top right, #102a43 0%, var(--bg-deep) 60%);
       --header-bg: rgba(7, 19, 30, 0.84);
@@ -831,6 +831,26 @@
     </div>
   </div>
 
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAwHzUiB4hqX9Vgt_eyBbT79CtB5PHa86s",
+      authDomain: "umbrella-nest.firebaseapp.com",
+      databaseURL: "https://umbrella-nest-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "umbrella-nest",
+      storageBucket: "umbrella-nest.firebasestorage.app",
+      messagingSenderId: "64335500660",
+      appId: "1:64335500660:web:174a2420a26f373cd38821",
+      measurementId: "G-C1S6XJ7LL6"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    window.UN_RTDB = { db, ref, set, onValue };
+  </script>
+
   <script>
     const STORAGE_KEYS = {
       PRODUCTS: "umbrellanest_products_v1",
@@ -995,6 +1015,14 @@
 
     const PRODUCTS = loadProducts();
 
+    function replaceProductsList(newList) {
+      if (!Array.isArray(newList) || !newList.length) return;
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(newList));
+      PRODUCTS.length = 0;
+      newList.forEach(item => PRODUCTS.push(item));
+      renderProducts();
+    }
+
     const I18N = {
       bn: {
         brandName: "Umbrella Nest",
@@ -1134,6 +1162,14 @@
       localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(state.orders));
       updateBadges();
       renderCheckoutSummary();
+    }
+
+    function pushOrderToFirebase(orderRecord) {
+      if (!window.UN_RTDB || !orderRecord || !orderRecord.orderId) return;
+      try {
+        const { db, ref, set } = window.UN_RTDB;
+        set(ref(db, "orders/" + orderRecord.orderId), orderRecord).catch(() => {});
+      } catch (_) {}
     }
 
     function updateBadges() {
@@ -1638,6 +1674,7 @@
       state.orders.unshift(orderRecord);
       state.cart = [];
       saveState();
+      pushOrderToFirebase(orderRecord);
       document.getElementById("orderForm").reset();
       document.getElementById("calcQty").value = 1;
       renderCheckoutSummary();
@@ -2011,6 +2048,13 @@
       return DEFAULT_BANNERS.slice();
     }
 
+    function replaceBannersList(newList) {
+      if (!Array.isArray(newList) || !newList.length) return;
+      localStorage.setItem(STORAGE_KEYS.BANNERS, JSON.stringify(newList.slice(0, 100)));
+      heroBannerIndex = 0;
+      syncHeroBannerSlide();
+    }
+
     let heroBannerIndex = 0;
     let bannerPauseUntil = 0;
 
@@ -2093,6 +2137,34 @@
         renderProducts();
       }
     });
+
+    (function attachStorefrontRealtimeSync() {
+      const waitTimer = setInterval(() => {
+        if (!window.UN_RTDB) return;
+        clearInterval(waitTimer);
+        const { db, ref, onValue } = window.UN_RTDB;
+
+        onValue(ref(db, "banners"), (snap) => {
+          const val = snap.val();
+          if (Array.isArray(val) && val.length > 0) {
+            replaceBannersList(val);
+          } else if (val && typeof val === "object") {
+            const arr = Object.values(val);
+            if (arr.length > 0) replaceBannersList(arr);
+          }
+        });
+
+        onValue(ref(db, "products"), (snap) => {
+          const val = snap.val();
+          if (Array.isArray(val) && val.length > 0) {
+            replaceProductsList(val);
+          } else if (val && typeof val === "object") {
+            const arr = Object.values(val);
+            if (arr.length > 0) replaceProductsList(arr);
+          }
+        });
+      }, 150);
+    })();
 
     updateBadges();
     applyLanguage();
